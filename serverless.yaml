@@ -1,0 +1,91 @@
+service: vf-sfcclogpull
+
+package:
+  exclude:
+    - config/**
+    - node_modules/**
+
+provider:
+  name: aws
+  stage: ${opt:stage, 'pc-poc'}
+  runtime: python3.7
+  region: us-east-1
+  memorySize: 128
+  timeout: 60
+  customConfig : ${file(../config/nora/${self:provider.stage}.json)}
+  deploymentBucket:
+    name: ${file(../config/nora/${self:provider.stage}.json):S3InfrastructureBucket}
+  tracing:
+    apiGateway: true
+    lambda: true
+  apiGateway:
+    restApiId: ${opt:api_id}
+    restApiRootResourceId: {opt:api_root_id}
+    restApiResources:
+      event: ${opt:api_event_id}
+  iamRoleStatements: # permissions for all of your functions can be set here
+    - Effect: Allow
+      Action: # Give permission to use Cognito User Pool
+        - iam:ListRoles
+        - iam:ListOpenIdConnectProviders
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - xray:*
+      Resource: '*'
+    - Effect: Allow
+      Action:
+        - lambda:*
+      Resource:
+        - "arn:aws:sqs:*:*:vf-${self:provider.stage}-${opt:vf_region}-ecom-event-logger-receiver"
+        - "arn:aws:sqs:*:*:vf-${self:provider.stage}-${opt:vf_region}-ecom-event-logger-authorizer"
+    - Effect: Allow
+      Action:
+        - sqs:*
+      Resource: "arn:aws:sqs:*:*:${opt:sqs_receiver_name}"
+    - Effect: Allow
+      Action:
+        - cloudwatch:*
+      Resources: 
+          - "arn:aws:logs:us-east-1:889476937682:log-group:vf-pc-poc-nora-ecom-common-loggroup:*"
+
+
+functions:
+  apigateway-receiver-to-sqs:
+    handler: src.event_receiver_to_sqs.lambda_handler
+    name: vf-${self:provider.stage}-${opt:vf_region}-ecom-event-logger-receiver
+    description: 'Receive Ecom logging events from API sent to a SQS'
+    environment:
+      queue_url: "${opt:sqs_receiver_id}"
+    events:
+     - http: 
+          # name: ${self:service} 
+          path: /event
+          method: POST
+          integration: lambda
+          authorizer: 
+            name: vf-${self:provider.stage}-${opt:vf_region}-ecom-event-user
+            arn: ${opt:cognito_arn}
+            scopes:
+              - //event
+          request:
+            headers:
+              Content-Type: "'application/json'"
+            template: 
+              application/json: $input.json("$")
+          response:
+            headers:
+              Content-Type: "'application/json'"
+
+functions:
+  lambdaevent:
+    handler: src.lambdaevent.lambda_handler
+    name: vf-${self:provider.stage}-${opt:vf_region}-lambdaevent
+    description: 'log pull'
+    environment:
+      queue_url: "https://development-na02-vfc.demandware.net/on/demandware.servlet/webdav/Sites/Logs/"
+    CWEvent:
+  Type: CloudWatchEvent
+  Properties:
+    Input: '{"Key": "Value"}'
+
